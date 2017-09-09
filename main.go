@@ -92,7 +92,9 @@ func run(ctx *cli.Context) error {
 				log.Info("Published Service Status")
 			}
 
-			logitem := log.WithFields(log.Fields{"type": update.Type})
+			logitem := log.WithFields(
+				log.Fields{"type": update.Type, "deviceid": update.Id},
+			)
 
 			switch update.Type {
 			case framework.DeviceUpdateTypeRem:

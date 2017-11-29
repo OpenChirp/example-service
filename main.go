@@ -1,11 +1,15 @@
 // Craig Hesling
-// September 9, 2017
+// November 26, 2017
 //
-// This is an example OpenChirp service. It sets up arguments and the main
-// runtime event loop to process new device service links
+// This is an example OpenChirp service that tracks the number of publications
+// to the rawrx and rawtx topics and publishes the count to the
+// rawrxcount and rawtxcount transducer topics.
+// This example demonstates argument/environment variable parsing,
+// setting up the service client, and handling device transducer data.
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -29,19 +33,120 @@ const (
 	runningStatus = true
 )
 
+const (
+	// The subscription key used to identify a messages types
+	rawRxKey = 0
+	rawTxKey = 1
+)
+
+// Device holds any data you want to keep around for a specific
+// device that has linked your service.
+//
+// In this example, we will keep track of the rawrx and rawtx message counts
+type Device struct {
+	rawRxCount int
+	rawTxCount int
+}
+
+// NewDevice is called by the framework when a new device has been linked.
+func NewDevice() framework.Device {
+	d := new(Device)
+	// The following initialization is redundant in Go
+	d.rawRxCount = 0
+	d.rawTxCount = 0
+	// Change type to the Device interface
+	return framework.Device(d)
+}
+
+// ProcessLink is called once, during the initial setup of a
+// device, and is provided the service config for the linking device.
+func (d *Device) ProcessLink(ctrl *framework.DeviceControl) string {
+	// This simply sets up console logging for our program.
+	// Any time this logitem is use to print messages,
+	// the key/value string "deviceid=<device_id>" is prepended to the line.
+	logitem := log.WithField("deviceid", ctrl.Id())
+	logitem.Debug("Linking with config:", ctrl.Config())
+
+	// Subscribe to subtopic "transducer/rawrx"
+	ctrl.Subscribe(framework.TransducerPrefix+"/rawrx", rawRxKey)
+	// Subscribe to subtopic "transducer/rawtx"
+	ctrl.Subscribe(framework.TransducerPrefix+"/rawtx", rawTxKey)
+
+	logitem.Debug("Finished Linking")
+
+	// This message is sent to the service status for the linking device
+	return "Success"
+}
+
+// ProcessUnlink is called once, when the service has been unlinked from
+// the device.
+func (d *Device) ProcessUnlink(ctrl *framework.DeviceControl) {
+	logitem := log.WithField("deviceid", ctrl.Id())
+	logitem.Debug("Unlinked:")
+
+	// The framework already handles unsubscribing from all
+	// Device associted subtopics, so we don't need to call
+	// ctrl.Unsubscribe.
+}
+
+// ProcessConfigChange is intended to handle a service config updates.
+// If your program does not need to handle incremental config changes,
+// simply return false, to indicate the config update was unhandled.
+// The framework will then automatically issue a ProcessUnlink and then a
+// ProcessLink, instead. Note, NewDevice is not called.
+//
+// For more information about this or other Device interface functions,
+// please see https://godoc.org/github.com/OpenChirp/framework#Device .
+func (d *Device) ProcessConfigChange(ctrl *framework.DeviceControl, cchanges, coriginal map[string]string) (string, bool) {
+	logitem := log.WithField("deviceid", ctrl.Id())
+
+	logitem.Debug("Ignoring Config Change:", cchanges)
+	return "", false
+
+	// If we have processed this config change, we should return the
+	// new service status message and true.
+	//
+	//logitem.Debug("Processing Config Change:", cchanges)
+	//return "Sucessfully updated", true
+}
+
+// ProcessMessage is called upon receiving a pubsub message destined for
+// this device.
+// Along with the standard DeviceControl object, the handler is provided
+// a Message object, which contains the received message's payload,
+// subtopic, and the provided Subscribe key.
+func (d *Device) ProcessMessage(ctrl *framework.DeviceControl, msg framework.Message) {
+	logitem := log.WithField("deviceid", ctrl.Id())
+	logitem.Debugf("Processing Message: %v: [ % #x ]", msg.Key(), msg.Payload())
+
+	if msg.Key().(int) == rawRxKey {
+		d.rawRxCount++
+		subtopic := framework.TransducerPrefix + "/rawrxcount"
+		ctrl.Publish(subtopic, fmt.Sprint(d.rawRxCount))
+	} else if msg.Key().(int) == rawTxKey {
+		d.rawTxCount++
+		subtopic := framework.TransducerPrefix + "/rawtxcount"
+		ctrl.Publish(subtopic, fmt.Sprint(d.rawTxCount))
+	} else {
+		logitem.Errorln("Received unassociated message")
+	}
+}
+
+// run is the main function that gets called once form main()
 func run(ctx *cli.Context) error {
-	/* Set logging level */
+	/* Set logging level (verbosity) */
 	log.SetLevel(log.Level(uint32(ctx.Int("log-level"))))
 
 	log.Info("Starting Example Service")
 
 	/* Start framework service client */
-	c, err := framework.StartServiceClientStatus(
+	c, err := framework.StartServiceClientManaged(
 		ctx.String("framework-server"),
 		ctx.String("mqtt-server"),
 		ctx.String("service-id"),
 		ctx.String("service-token"),
-		"Unexpected disconnect!")
+		"Unexpected disconnect!",
+		NewDevice)
 	if err != nil {
 		log.Error("Failed to StartServiceClient: ", err)
 		return cli.NewExitError(nil, 1)
@@ -49,75 +154,31 @@ func run(ctx *cli.Context) error {
 	defer c.StopClient()
 	log.Info("Started service")
 
-	/* Post service status indicating I am starting */
-	err = c.SetStatus("Starting")
-	if err != nil {
+	/* Post service's global status */
+	if err := c.SetStatus("Starting"); err != nil {
 		log.Error("Failed to publish service status: ", err)
 		return cli.NewExitError(nil, 1)
 	}
 	log.Info("Published Service Status")
 
-	/* Start service main device updates stream */
-	log.Info("Starting Device Updates Stream")
-	updates, err := c.StartDeviceUpdatesSimple()
-	if err != nil {
-		log.Error("Failed to start device updates stream: ", err)
-		return cli.NewExitError(nil, 1)
-	}
-	defer c.StopDeviceUpdates()
-
 	/* Setup signal channel */
-	log.Info("Processing device updates")
 	signals := make(chan os.Signal)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 
 	/* Post service status indicating I started */
-	err = c.SetStatus("Started")
-	if err != nil {
+	if err := c.SetStatus("Started"); err != nil {
 		log.Error("Failed to publish service status: ", err)
 		return cli.NewExitError(nil, 1)
 	}
 	log.Info("Published Service Status")
 
-	for {
-		select {
-		case update := <-updates:
-			/* If runningStatus is set, post a service status as an alive msg */
-			if runningStatus {
-				err = c.SetStatus("Running")
-				if err != nil {
-					log.Error("Failed to publish service status: ", err)
-					return cli.NewExitError(nil, 1)
-				}
-				log.Info("Published Service Status")
-			}
-
-			logitem := log.WithFields(
-				log.Fields{"type": update.Type, "deviceid": update.Id},
-			)
-
-			switch update.Type {
-			case framework.DeviceUpdateTypeRem:
-				logitem.Info("Removing device with id ", update.Id, " and config ", update.Config)
-			case framework.DeviceUpdateTypeUpd:
-				logitem.Info("Removing device for update with id", update.Id, " and config ", update.Config)
-				fallthrough
-			case framework.DeviceUpdateTypeAdd:
-				logitem.Info("Adding device")
-				c.SetDeviceStatus(update.Id, "Added device with id ", update.Id, " and config ", update.Config)
-				// devTopic := "openchirp/devices/" + update.Id + "/transducer"
-			}
-		case sig := <-signals:
-			log.WithField("signal", sig).Info("Received signal")
-			goto cleanup
-		}
-	}
-
-cleanup:
-
+	/* Wait on a signal */
+	sig := <-signals
+	log.Info("Received signal ", sig)
 	log.Warning("Shutting down")
-	err = c.SetStatus("Shutting down")
-	if err != nil {
+
+	/* Post service's global status */
+	if err := c.SetStatus("Shutting down"); err != nil {
 		log.Error("Failed to publish service status: ", err)
 	}
 	log.Info("Published service status")
@@ -126,6 +187,7 @@ cleanup:
 }
 
 func main() {
+	/* Parse arguments and environemtnal variable */
 	app := cli.NewApp()
 	app.Name = "example-service"
 	app.Usage = ""
@@ -162,5 +224,7 @@ func main() {
 			EnvVar: "LOG_LEVEL",
 		},
 	}
+
+	/* Launch the application */
 	app.Run(os.Args)
 }

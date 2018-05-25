@@ -187,7 +187,7 @@ func run(ctx *cli.Context) error {
 }
 
 func main() {
-	/* Parse arguments and environemtnal variable */
+	/* Parse arguments and environmental variable */
 	app := cli.NewApp()
 	app.Name = "example-service"
 	app.Usage = ""

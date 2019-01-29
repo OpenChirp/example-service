@@ -85,7 +85,7 @@ func (d *Device) ProcessUnlink(ctrl *framework.DeviceControl) {
 	logitem.Debug("Unlinked:")
 
 	// The framework already handles unsubscribing from all
-	// Device associted subtopics, so we don't need to call
+	// Device associated subtopics, so we don't need to call
 	// ctrl.Unsubscribe.
 }
 
@@ -107,7 +107,7 @@ func (d *Device) ProcessConfigChange(ctrl *framework.DeviceControl, cchanges, co
 	// new service status message and true.
 	//
 	//logitem.Debug("Processing Config Change:", cchanges)
-	//return "Sucessfully updated", true
+	//return "Successfully updated", true
 }
 
 // ProcessMessage is called upon receiving a pubsub message destined for
